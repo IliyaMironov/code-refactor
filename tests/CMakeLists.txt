@@ -35,6 +35,10 @@ file(GLOB TEST_SRC_FILES "${CMAKE_SOURCE_DIR}/tests/*.cpp")
 add_executable(${PROJECT_NAME}_tests "${TEST_SRC_FILES}")
 target_link_libraries(${PROJECT_NAME}_tests PRIVATE gtest_main)
 target_include_directories(${PROJECT_NAME}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(${PROJECT_NAME}_tests PRIVATE
+    REFACTOR_TOOL_PATH="$<TARGET_FILE:refactor_tool>"
+    TESTS_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests_data"
+)
 
 
 include(GoogleTest)

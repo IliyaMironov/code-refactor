@@ -23,16 +23,16 @@ void RefactorHandler::run(const MatchFinder::MatchResult &Result) {
     auto& Diag = Result.Context->getDiagnostics();
     auto& SM = *Result.SourceManager; // Получаем SourceManager для проверки isInMainFile
     
-    if (const auto *Dtor = Result.Nodes.getNodeAs<CXXDestructorDecl>("classDecl")) {
+    if (const auto *Dtor = Result.Nodes.getNodeAs<CXXDestructorDecl>("nonVirtualDtor")) {
         handle_nv_dtor(Dtor, Diag, SM);
     }
 
-    if (const auto *Method = Result.Nodes.getNodeAs<CXXMethodDecl>("methodDecl");
+    if (const auto *Method = Result.Nodes.getNodeAs<CXXMethodDecl>("missingOverride");
         Method && Method->size_overridden_methods() > 0 && !Method->hasAttr<OverrideAttr>()) {
         handle_miss_override(Method, Diag, SM);
     }
 
-    if (const auto *LoopVar = Result.Nodes.getNodeAs<VarDecl>("VarDecl")) {
+    if (const auto *LoopVar = Result.Nodes.getNodeAs<VarDecl>("loopVar")) {
         handle_crange_for(LoopVar, Diag, SM);
     }
 }
@@ -42,6 +42,10 @@ void RefactorHandler::handle_nv_dtor(const CXXDestructorDecl *Dtor,
                             DiagnosticsEngine &Diag,
                             SourceManager &SM) {
     //Реализуйте Ваш код ниже
+    if (!SM.isInMainFile(Dtor->getLocation())) return;
+    unsigned Offset = SM.getFileOffset(Dtor->getLocation());
+    if (!virtualDtorLocations.insert(Offset).second) return;
+    Rewrite.InsertTextBefore(Dtor->getBeginLoc(), "virtual ");
     const unsigned DiagID = Diag.getCustomDiagID(
             DiagnosticsEngine::Remark,
             "Объявлен деструктор"
@@ -54,6 +58,22 @@ void RefactorHandler::handle_miss_override(const CXXMethodDecl *Method,
                             DiagnosticsEngine &Diag,
                             SourceManager &SM) {
     //Реализуйте Ваш код ниже
+    if (!SM.isInMainFile(Method->getLocation())) return;
+    SourceLocation SearchLoc = Method->getNameInfo().getEndLoc();
+    const char *Buf = SM.getCharacterData(SearchLoc);
+    int Depth = 0;
+    while (*Buf) {
+        if (*Buf == '(') ++Depth;
+        else if (*Buf == ')') {
+            --Depth;
+            if (Depth == 0) break;
+        }
+        ++Buf;
+    }
+
+    SourceLocation InsertLoc = SearchLoc.getLocWithOffset(Buf - SM.getCharacterData(SearchLoc) + 1);
+    Rewrite.InsertText(InsertLoc, " override");
+
     const unsigned DiagID = Diag.getCustomDiagID(
             DiagnosticsEngine::Remark,
             "Объявлен метод"
@@ -66,6 +86,13 @@ void RefactorHandler::handle_crange_for(const VarDecl *LoopVar,
                                         DiagnosticsEngine &Diag,
                                         SourceManager &SM){
     // Реализуйте Ваш код ниже
+    if (!SM.isInMainFile(LoopVar->getLocation())) return;
+    QualType T = LoopVar->getType();
+    if (T->isFundamentalType()) return;
+    // Вставляем & после конца TypeLoc
+    TypeLoc TL = LoopVar->getTypeSourceInfo()->getTypeLoc();
+    SourceLocation EndLoc = Lexer::getLocForEndOfToken(TL.getEndLoc(), 0, SM, Rewrite.getLangOpts());
+    Rewrite.InsertText(EndLoc, "&");
     const unsigned DiagID = Diag.getCustomDiagID(
             DiagnosticsEngine::Remark,
             "Объявлена переменная"
@@ -84,20 +111,36 @@ void RefactorHandler::handle_crange_for(const VarDecl *LoopVar,
 */
 auto NvDtorMatcher()
 {
-    //todo: замените код ниже, на свою реализацию, необходимо реализовать матчеры для поиска невиртуальных деструкторов
-    return cxxDestructorDecl().bind("classDecl");
+    return cxxRecordDecl(
+        hasAnyBase(
+            hasType(
+                cxxRecordDecl(
+                    hasMethod(cxxDestructorDecl(unless(isVirtual())).bind("nonVirtualDtor"))
+                )
+            )
+        )
+    );
 }
 
 auto NoOverrideMatcher()
 {
     //todo: замените код ниже, на свою реализацию, необходимо реализовать матчеры для поиска методов без override
-    return cxxMethodDecl().bind("methodDecl");
+    return cxxMethodDecl(
+        isVirtual(),
+        unless(isOverride()),
+        ofClass(hasAnyBase(hasType(cxxRecordDecl())))
+    ).bind("missingOverride");
 }
 
 auto NoRefConstVarInRangeLoopMatcher()
 {
     //todo: замените код ниже, на свою реализацию, необходимо реализовать матчеры для поиска range-for без &
-    return varDecl().bind("VarDecl");
+    return cxxForRangeStmt(hasLoopVariable(
+        varDecl(
+            hasType(isConstQualified()),
+            unless(hasType(referenceType()))
+        ).bind("loopVar")
+    ));
 }
 
 // Конструктор принимает Rewriter для изменения кода.
