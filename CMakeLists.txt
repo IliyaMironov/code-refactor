@@ -10,6 +10,8 @@ project(clang-tutor)
 # `Clang_ROOT`) are also supported. Visit CMake documentation for more details:
 #   https://cmake.org/cmake/help/latest/command/find_package.html
 # Use only _one_ of these variables.
+set(CT_Clang_INSTALL_DIR "/usr/lib/llvm-20/")
+
 
 if(DEFINED Clang_ROOT)
   set(CT_CLANG_PACKAGE_DIR "${Clang_ROOT}/../../..")

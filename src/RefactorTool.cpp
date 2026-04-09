@@ -109,13 +109,17 @@ void RefactorHandler::handle_crange_for(const VarDecl *LoopVar,
         return cxxRecordDecl().bind("classDecl");
     }
 */
+
 auto NvDtorMatcher()
 {
     return cxxRecordDecl(
         hasAnyBase(
             hasType(
                 cxxRecordDecl(
-                    hasMethod(cxxDestructorDecl(unless(isVirtual())).bind("nonVirtualDtor"))
+                    hasMethod(cxxDestructorDecl(
+                        unless(isVirtual()),
+                        unless(isImplicit())   // <-- добавить
+                    ).bind("nonVirtualDtor"))
                 )
             )
         )
@@ -124,11 +128,9 @@ auto NvDtorMatcher()
 
 auto NoOverrideMatcher()
 {
-    //todo: замените код ниже, на свою реализацию, необходимо реализовать матчеры для поиска методов без override
     return cxxMethodDecl(
-        isVirtual(),
-        unless(isOverride()),
-        ofClass(hasAnyBase(hasType(cxxRecordDecl())))
+        isOverride(),                    // <-- вместо isVirtual(), unless(isOverride())
+        unless(cxxDestructorDecl())      // <-- добавить
     ).bind("missingOverride");
 }
 
