@@ -8,6 +8,7 @@
 #include "llvm/Support/CommandLine.h"
 
 #include <unordered_set>
+#include <cstring>
 
 #include "RefactorTool.h"
 
@@ -16,9 +17,25 @@ using namespace clang::ast_matchers;
 using namespace clang::tooling;
 
 static llvm::cl::OptionCategory ToolCategory("refactor-tool options");
+static llvm::cl::opt<std::string> LogFile("log",
+    llvm::cl::desc("Path to log file for refactoring changes"),
+    llvm::cl::init(""),
+    llvm::cl::cat(ToolCategory));
 
 // Метод run вызывается для каждого совпадения с матчем. 
 // Мы проверяем тип совпадения по bind-именам и применяем рефакторинг.
+void RefactorHandler::log(const SourceManager &SM, SourceLocation Loc,
+                          const char *Kind, const char *Name) {
+    if (!LogStream.is_open()) return;
+    auto PLoc = SM.getPresumedLoc(Loc);
+    if (PLoc.isValid()) {
+        LogStream << PLoc.getFilename() << ":"
+                  << PLoc.getLine() << ": "
+                  << Kind << ": " << Name << "\n";
+        LogStream.flush();
+    }
+}
+
 void RefactorHandler::run(const MatchFinder::MatchResult &Result) {
     auto& Diag = Result.Context->getDiagnostics();
     auto& SM = *Result.SourceManager; // Получаем SourceManager для проверки isInMainFile
@@ -46,6 +63,8 @@ void RefactorHandler::handle_nv_dtor(const CXXDestructorDecl *Dtor,
     unsigned Offset = SM.getFileOffset(Dtor->getLocation());
     if (!virtualDtorLocations.insert(Offset).second) return;
     Rewrite.InsertTextBefore(Dtor->getBeginLoc(), "virtual ");
+    log(SM, Dtor->getLocation(), "virtual-dtor",
+        Dtor->getParent()->getNameAsString().c_str());
     const unsigned DiagID = Diag.getCustomDiagID(
             DiagnosticsEngine::Remark,
             "Объявлен деструктор"
@@ -71,8 +90,30 @@ void RefactorHandler::handle_miss_override(const CXXMethodDecl *Method,
         ++Buf;
     }
 
-    SourceLocation InsertLoc = SearchLoc.getLocWithOffset(Buf - SM.getCharacterData(SearchLoc) + 1);
+    ++Buf;
+
+    const char *Suffixes[] = {"const", "volatile", "noexcept", "&&", "&"};
+    bool Found = true;
+    while (Found) {
+        const char *BeforeWS = Buf;
+        while (*Buf == ' ' || *Buf == '\t') ++Buf;
+        Found = false;
+        for (const char *Suf : Suffixes) {
+            size_t Len = std::strlen(Suf);
+            if (std::strncmp(Buf, Suf, Len) == 0 &&
+                (Len <= 2 || !std::isalnum(static_cast<unsigned char>(Buf[Len])))) {
+                Buf += Len;
+                Found = true;
+                break;
+            }
+        }
+        if (!Found) Buf = BeforeWS;
+    }
+
+    SourceLocation InsertLoc = SearchLoc.getLocWithOffset(Buf - SM.getCharacterData(SearchLoc));
     Rewrite.InsertText(InsertLoc, " override");
+    log(SM, Method->getLocation(), "add-override",
+        Method->getQualifiedNameAsString().c_str());
 
     const unsigned DiagID = Diag.getCustomDiagID(
             DiagnosticsEngine::Remark,
@@ -93,6 +134,8 @@ void RefactorHandler::handle_crange_for(const VarDecl *LoopVar,
     TypeLoc TL = LoopVar->getTypeSourceInfo()->getTypeLoc();
     SourceLocation EndLoc = Lexer::getLocForEndOfToken(TL.getEndLoc(), 0, SM, Rewrite.getLangOpts());
     Rewrite.InsertText(EndLoc, "&");
+    log(SM, LoopVar->getLocation(), "add-reference",
+        LoopVar->getNameAsString().c_str());
     const unsigned DiagID = Diag.getCustomDiagID(
             DiagnosticsEngine::Remark,
             "Объявлена переменная"
@@ -146,7 +189,8 @@ auto NoRefConstVarInRangeLoopMatcher()
 }
 
 // Конструктор принимает Rewriter для изменения кода.
-ComplexConsumer::ComplexConsumer(Rewriter &Rewrite) : Handler(Rewrite) {
+ComplexConsumer::ComplexConsumer(Rewriter &Rewrite, const std::string &LogPath)
+    : Handler(Rewrite, LogPath) {
     // Создаем MatchFinder и добавляем матчеры.
     Finder.addMatcher(NvDtorMatcher(), &Handler);
     Finder.addMatcher(NoOverrideMatcher(), &Handler);
@@ -163,7 +207,7 @@ std::unique_ptr<ASTConsumer> CodeRefactorAction::CreateASTConsumer(CompilerInsta
                                                 StringRef file) {
     RewriterForCodeRefactor.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
     return std::make_unique<ComplexConsumer>(
-        RewriterForCodeRefactor);
+        RewriterForCodeRefactor, LogFile);
 }
 
 bool CodeRefactorAction::BeginSourceFileAction( CompilerInstance &CI) {
