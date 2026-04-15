@@ -9,10 +9,16 @@
 #include "llvm/Support/CommandLine.h"
 
 #include <unordered_set>
+#include <fstream>
 
 class RefactorHandler : public clang::ast_matchers::MatchFinder::MatchCallback {
 public:
-    explicit RefactorHandler(clang::Rewriter &Rewrite) : Rewrite(Rewrite) {}
+    explicit RefactorHandler(clang::Rewriter &Rewrite, const std::string &LogPath = "")
+        : Rewrite(Rewrite)
+    {
+        if (!LogPath.empty())
+            LogStream.open(LogPath, std::ios::app);
+    }
     // Метод run вызывается для каждого совпадения с матчем. 
     // Мы проверяем тип совпадения по bind-именам и применяем рефакторинг.
     virtual void run(const clang::ast_matchers::MatchFinder::MatchResult &Result) override;
@@ -34,14 +40,18 @@ private:
                                     clang::DiagnosticsEngine &Diag,
                                     clang::SourceManager &SM);
 private:
+    void log(const clang::SourceManager &SM, clang::SourceLocation Loc,
+             const char *Kind, const char *Name);
+
     clang::Rewriter &Rewrite;
+    std::ofstream LogStream;
     std::unordered_set<unsigned> virtualDtorLocations; // Для хранения позиций деструкторов, к которым уже добавлен virtual
 };
 
 class ComplexConsumer : public clang::ASTConsumer {
 public:
     // Конструктор принимает Rewriter для изменения кода.
-    explicit ComplexConsumer(clang::Rewriter &Rewrite);
+    explicit ComplexConsumer(clang::Rewriter &Rewrite, const std::string &LogPath = "");
     // Метод HandleTranslationUnit вызывается для каждого файла.
     void HandleTranslationUnit(clang::ASTContext &Context) override;
 private:

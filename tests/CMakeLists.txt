@@ -9,6 +9,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wfatal-errors)
 endif()
 
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+if(ENABLE_ASAN)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
+
 #----------------------------------------------------------------------------------------------------------------------
 # testing framework
 #----------------------------------------------------------------------------------------------------------------------
@@ -33,9 +39,19 @@ FetchContent_MakeAvailable(googletest)
 file(GLOB TEST_SRC_FILES "${CMAKE_SOURCE_DIR}/tests/*.cpp")
 
 add_executable(${PROJECT_NAME}_tests "${TEST_SRC_FILES}")
-target_link_libraries(${PROJECT_NAME}_tests PRIVATE gtest_main)
+target_link_libraries(${PROJECT_NAME}_tests PRIVATE gtest_main gmock)
 target_include_directories(${PROJECT_NAME}_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(${PROJECT_NAME}_tests PRIVATE
+    REFACTOR_TOOL_PATH="$<TARGET_FILE:refactor_tool>"
+    TESTS_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests_data"
+)
 
 
 include(GoogleTest)
 gtest_discover_tests(refactor_tool_tests)
+
+add_custom_target(ci
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS ${PROJECT_NAME}_tests refactor_tool
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
